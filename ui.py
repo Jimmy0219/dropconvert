@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -25,13 +27,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import convert
-from engines import ROUTES, ConvertError, office_cleanup, unique_path
+from engines import MERGE_TARGET, ROUTES, ConvertError, office_cleanup, unique_path
 
 HOST = "127.0.0.1"   # 只聽本機，區網的其他電腦連不進來
 DEFAULT_PORT = 8765
 PAGE = Path(__file__).with_name("ui.html")
 UPLOAD_CHUNK = 1024 * 1024   # 大影片分塊寫入，不整個讀進 8GB 的記憶體
 HISTORY_LIMIT = 200          # 「轉換完成」最多保留幾筆
+BATCH_TOKEN = re.compile(r"[0-9a-f]{32}")
 
 
 class Runner:
@@ -113,6 +116,18 @@ def inside_our_folders(path: Path) -> bool:
                for f in (convert.INBOX, convert.OUTBOX, convert.DONE))
 
 
+def batch_folder(token: str) -> Path | None:
+    """合併用的批次資料夾。上傳期間是隱藏的，scan() 看不到，傳完才改成正式名稱。"""
+    if not BATCH_TOKEN.fullmatch(token or ""):
+        return None
+    return convert.INBOX / MERGE_TARGET / f".batch-{token}"
+
+
+def clean_batch_name(name: str) -> str:
+    name = Path(name or "").name.replace(":", "：").strip().lstrip(".~$").strip()
+    return name[:80] or "合併"
+
+
 def build_state() -> dict:
     jobs, warnings = convert.scan()
     run, history = runner.snapshot()
@@ -129,6 +144,7 @@ def build_state() -> dict:
             "status": status,
             "message": item.get("message") or job.note,
             "elapsed": round(now - item["started"]) if status == "running" else None,
+            "count": job.count,
         })
 
     done = [{**entry, "outputs": [{"path": p, "label": convert.show(Path(p))}
@@ -219,6 +235,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(HTTPStatus.BAD_REQUEST, "只能開啟轉檔資料夾裡的檔案")
             subprocess.run(["open", "-R", str(target)], check=False)
             return self._json({"ok": True})
+        if url.path == "/api/finish-batch":
+            body = self._body_json()
+            folder = batch_folder(body.get("token", ""))
+            if folder is None or not folder.is_dir() or not any(folder.iterdir()):
+                return self._error(HTTPStatus.BAD_REQUEST, "找不到這批檔案")
+            final = unique_path(convert.INBOX / MERGE_TARGET / clean_batch_name(body.get("name", "")))
+            folder.rename(final)
+            return self._json({"saved": convert.show(final)})
+        if url.path == "/api/abort-batch":
+            folder = batch_folder(self._body_json().get("token", ""))
+            if folder is not None and folder.is_dir():
+                shutil.rmtree(folder)
+            return self._json({"ok": True})
         if url.path == "/api/open":
             folder = folder_of(self._body_json().get("folder", ""))
             if folder is None:
@@ -239,11 +268,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(HTTPStatus.BAD_REQUEST, "檔名不合法")
         if Path(name).suffix.lower() not in ROUTES[target]:
             return self._error(HTTPStatus.BAD_REQUEST,
-                               f"「{name}」不能轉成 {target}")
+                               f"「{name}」不能合併成 PDF" if target == MERGE_TARGET
+                               else f"「{name}」不能轉成 {target}")
         if length < 0:
             return self._error(HTTPStatus.LENGTH_REQUIRED, "缺少檔案大小")
 
-        folder = convert.INBOX / target
+        if target == MERGE_TARGET:
+            folder = batch_folder((query.get("batch") or [""])[0])
+            if folder is None:
+                return self._error(HTTPStatus.BAD_REQUEST, "缺少批次代號")
+        else:
+            folder = convert.INBOX / target
         folder.mkdir(parents=True, exist_ok=True)
         # 先寫到隱藏的暫存檔，傳完才改名：scan() 會略過隱藏檔，
         # 所以不會有人拿到傳到一半的檔案去轉。

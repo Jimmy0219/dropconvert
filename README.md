@@ -4,7 +4,7 @@ Mac 上的資料夾式轉檔工具：把檔案拖進視窗（或丟進資料夾�
 支援日常最常用的三大類：
 
 - **文件**：Word／Excel／PowerPoint → PDF、Markdown ↔ Word、文件 → Markdown
-- **圖片**：JPG ↔ PNG ↔ PDF（也吃 HEIC、TIFF、WebP）
+- **圖片**：JPG ↔ PNG ↔ PDF（也吃 HEIC、TIFF、WebP），或把多張圖片／PDF **合併成一份 PDF**
 - **影片**：WMV／MOV → MP4（能無損就不重壓，否則用硬體編碼）
 
 全部在 Mac 本機執行，檔案不會上傳到任何地方。Office 文件用你已經安裝的 Microsoft Office 轉，
@@ -104,9 +104,12 @@ cd dropconvert
 │   ├── docx/        筆記.md
 │   ├── jpg/         截圖.png、掃描.pdf
 │   ├── png/         照片.jpg、iPhone.heic
-│   └── mp4/         錄影.mov、舊影片.wmv
+│   ├── mp4/         錄影.mov、舊影片.wmv
+│   └── 合併pdf/
+│       └── 出差收據/   1.jpg、2.jpg、3.png   ← 一個子資料夾合併成一份
 ├── 已轉檔/          ← 轉好的檔案，一樣依格式分資料夾
-│   └── pdf/         報告.pdf、報表.pdf …
+│   ├── pdf/         報告.pdf、報表.pdf …
+│   └── 合併pdf/     出差收據.pdf
 └── 已處理/          ← 轉換成功後，原始檔移到這裡
     └── pdf/         報告.docx …
 ```
@@ -127,9 +130,23 @@ cd dropconvert
 | `jpg/` `png/` | 其他圖片格式 | `sips` |
 | | `.pdf` | poppler `pdftoppm`（200 dpi，每頁一張） |
 | `mp4/` | `.wmv` `.asf` `.mov` `.qt` | ffmpeg（見下方〈影片轉檔細節〉） |
+| `合併pdf/<名稱>/` | 圖片（同上）與 `.pdf`，可以混著放 | macOS 內建的 CoreGraphics／PDFKit |
 
 多頁 PDF 轉圖片時，會放進同名資料夾：`已轉檔/jpg/講義/講義-1.jpg`、`講義-2.jpg`…；
 單頁 PDF 則直接輸出 `已轉檔/jpg/講義.jpg`。
+
+### 合併成一份 PDF
+
+- **在 App 裡**：把要合併的檔案**一次**拖進「合併成一份 PDF」格子。
+  預設檔名是「第一個檔名–最後一個檔名」（例如 `收據1–收據10.pdf`），轉好後可以自己改名
+- **用資料夾**：在 `待轉檔/合併pdf/` 底下開一個子資料夾，資料夾名稱就是輸出的檔名；
+  直接放在 `合併pdf/` 這一層的檔案不會處理，因為不知道要跟誰合併
+- **頁面順序依檔名的自然順序**：`2.png` 排在 `10.png` 前面。想調整順序，改檔名就好
+- **畫質不變**：JPEG 原樣嵌入不重新壓縮，PNG／HEIC 無損保存，像素完整保留
+- 圖片頁寬統一為 A4 寬、高度依圖片比例，列印時不會出現超大頁面
+- 手機照片會依 EXIF 自動轉正，不會橫躺
+- PDF 整頁搬過來，文字、向量圖和連結都保留；有密碼保護的 PDF 無法合併
+- 子資料夾裡混了其他檔案（例如 `.txt`）時，整批會略過並說明原因，不會只合併一部分
 
 ## 行為細節
 
@@ -157,7 +174,7 @@ cd dropconvert
 ## 已知限制
 
 - Office 轉 PDF 一次處理一份，每份約數秒；大量檔案時會比較久
-- 圖片轉 PDF 是一張圖一個 PDF，不會合併
+- 丟進 `pdf/` 的圖片是一張圖一個 PDF；要合併請用「合併成一份 PDF」
 - Markdown 轉 Word 用 pandoc 預設樣式，不會套用你自己的 Word 範本
 - Markdown 裡用相對路徑引用的圖片會正確嵌入，但圖片檔本身不會跟著移到 `已處理/`
 
@@ -174,6 +191,7 @@ cd dropconvert
 | [install.sh](install.sh) | 給一般使用者的安裝／更新／解除安裝腳本 |
 | [make_app.sh](make_app.sh) | 產生 `轉檔工具.app`：安裝相依套件、產生圖示、編譯啟動器 |
 | [launcher.c](launcher.c) | App 的執行檔：把 Python 載進自己的程序執行，系統才會把它認成「轉檔工具」而不是 python |
+| [merge_pdf.py](merge_pdf.py) | 把圖片與 PDF 合併成一份 PDF（CoreGraphics／PDFKit，由 `engines.py` 呼叫） |
 | [make_icon.py](make_icon.py)、[icon.svg](icon.svg) | App 圖示的原稿，以及轉成 `.icns` 的腳本 |
 
 要新增一種轉換，在 `engines.py` 寫一個 `engine(src, dst) -> list[Path]` 函式，

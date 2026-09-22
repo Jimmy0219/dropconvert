@@ -17,6 +17,7 @@
     --shadow: 0 1px 2px rgb(0 0 0 / .04), 0 1px 8px rgb(0 0 0 / .04);
     --c-pdf: #d0402f;  --c-md: #4f5b66;  --c-docx: #2b5fae;
     --c-jpg: #c06d12;  --c-png: #11837a; --c-mp4: #7348c4;
+    --c-merge: #b02f6c;
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
@@ -26,6 +27,7 @@
       --shadow: none;
       --c-pdf: #ff7a66; --c-md: #a9b4bf; --c-docx: #7ea8ff;
       --c-jpg: #f0a24a; --c-png: #4fd1c1; --c-mp4: #b595ff;
+      --c-merge: #ff7fb8;
     }
   }
   * { box-sizing: border-box; }
@@ -74,6 +76,7 @@
   .card .fmt { font-size: 22px; font-weight: 700; color: var(--c); letter-spacing: .02em; }
   .card .from { color: var(--muted); font-size: 13px; margin-top: 2px; }
   .card .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .card.wide { grid-column: 1 / -1; min-height: 0; }   /* 合併：跟其他格子是不同的動作，獨立一排 */
   .card input { position: absolute; width: 1px; height: 1px; opacity: 0; }
   .card .progress { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 16px;
                     font-size: 12px; background: var(--panel); border-top: 1px solid var(--line); }
@@ -168,7 +171,10 @@ const TARGETS = {
   jpg:  { label: "JPG",      from: "PNG、HEIC、PDF 等" },
   png:  { label: "PNG",      from: "JPG、HEIC、PDF 等" },
   mp4:  { label: "MP4",      from: "MOV、WMV" },
+  "合併pdf": { label: "合併成一份 PDF", short: "合併 PDF", css: "merge", merge: true,
+               from: "把多張圖片或 PDF 一次拖進來，會依檔名順序合併成一份" },
 };
+const colorOf = (target) => `var(--c-${TARGETS[target]?.css ?? target})`;
 const RETRYABLE = ["pending", "failed", "cancelled"];
 const $ = (sel) => document.querySelector(sel);
 let state = null;
@@ -205,12 +211,12 @@ function buildCards(routes) {
   const cards = $("#cards");
   for (const [target, info] of Object.entries(TARGETS)) {
     const input = el("input", { type: "file", multiple: true, accept: routes[target].join(",") });
-    const card = el("label", { className: "card" },
+    const card = el("label", { className: info.merge ? "card wide" : "card" },
       el("div", { className: "fmt", textContent: `→ ${info.label}` }),
-      el("div", { className: "from", textContent: `從 ${info.from}` }),
+      el("div", { className: "from", textContent: info.merge ? info.from : `從 ${info.from}` }),
       el("div", { className: "hint", textContent: routes[target].join(" ") }),
       input);
-    card.style.setProperty("--c", `var(--c-${target})`);
+    card.style.setProperty("--c", colorOf(target));
     input.addEventListener("change", () => { upload(target, card, [...input.files]); input.value = ""; });
 
     let depth = 0;   // 拖過子元素時 dragenter/dragleave 會成對觸發，用計數避免閃爍
@@ -230,24 +236,53 @@ async function upload(target, card, files) {
   const extOf = (name) => (name.includes(".") ? "." + name.split(".").pop().toLowerCase() : "");
   const good = files.filter((f) => accepted.includes(extOf(f.name)));
   const bad = files.filter((f) => !good.includes(f));
+  const merge = TARGETS[target].merge;
   if (bad.length) {
-    toast(`${bad.map((f) => `「${f.name}」`).join("、")}不能轉成 ${TARGETS[target].label}` +
-          `，可接受：${accepted.join(" ")}`);
+    toast(`${bad.map((f) => `「${f.name}」`).join("、")}` +
+          (merge ? "不能合併" : `不能轉成 ${TARGETS[target].label}`) + `，可接受：${accepted.join(" ")}`);
   }
-  for (const [i, file] of good.entries()) {
-    await uploadOne(target, card, file, `${i + 1}/${good.length}`);
+  if (merge && good.length) {
+    await uploadBatch(target, card, good);
+  } else {
+    for (const [i, file] of good.entries()) {
+      await uploadOne(target, card, file, `${i + 1}/${good.length}`);
+    }
   }
   card.querySelector(".progress")?.remove();
   card.querySelector(".bar")?.remove();
   refresh();
 }
 
-function uploadOne(target, card, file, counter) {
+// 合併：這一次拖進來的檔案先傳進同一個隱藏的批次資料夾，全部傳完才改成正式名稱，
+// 所以不會有「只傳了一半」的批次被拿去合併
+async function uploadBatch(target, card, files) {
+  const token = [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  const sorted = [...files].sort((a, b) => NAME_ORDER.compare(a.name, b.name));
+  // 預設名稱「第一個–最後一個」，例如「收據1–收據10」；轉好之後可以自己改檔名
+  const stem = (f) => f.name.replace(/\.[^.]+$/, "").slice(0, 36);
+  const first = stem(sorted[0]), last = stem(sorted.at(-1));
+  const name = sorted.length > 1 && first !== last ? `${first}–${last}` : first;
+  let ok = true;
+  for (const [i, file] of sorted.entries()) {
+    ok = (await uploadOne(target, card, file, `${i + 1}/${sorted.length}`, token)) && ok;
+  }
+  if (ok) {
+    await api("/api/finish-batch", { token, name }).catch((e) => toast(e.message));
+  } else {
+    await api("/api/abort-batch", { token }).catch(() => {});
+    toast("有檔案加入失敗，這一批已取消，請重新拖一次");
+  }
+}
+const NAME_ORDER = new Intl.Collator("zh-Hant", { numeric: true });   // 2.png 排在 10.png 前面
+
+function uploadOne(target, card, file, counter, batch) {
   const label = card.querySelector(".progress") || card.appendChild(el("div", { className: "progress" }));
   const bar = card.querySelector(".bar") || card.appendChild(el("div", { className: "bar" }));
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `/api/upload?target=${target}&name=${encodeURIComponent(file.name)}`);
+    xhr.open("POST", `/api/upload?target=${encodeURIComponent(target)}` +
+                     `&name=${encodeURIComponent(file.name)}` + (batch ? `&batch=${batch}` : ""));
     xhr.setRequestHeader("X-Fileconv", "1");
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
@@ -261,9 +296,9 @@ function uploadOne(target, card, file, counter) {
         try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
         toast(msg);
       }
-      resolve();
+      resolve(xhr.status < 400);
     };
-    xhr.onerror = () => { toast(`「${file.name}」加入失敗，連線中斷`); resolve(); };
+    xhr.onerror = () => { toast(`「${file.name}」加入失敗，連線中斷`); resolve(false); };
     xhr.send(file);
   });
 }
@@ -285,8 +320,9 @@ function statusText(item) {
 }
 
 function pill(target) {
-  const p = el("span", { className: "pill", textContent: target ? `→ ${TARGETS[target].label}` : "未分類" });
-  if (target) p.style.setProperty("--c", `var(--c-${target})`);
+  const info = TARGETS[target];
+  const p = el("span", { className: "pill", textContent: info ? `→ ${info.short ?? info.label}` : "未分類" });
+  if (info) p.style.setProperty("--c", colorOf(target));
   return p;
 }
 
@@ -301,7 +337,8 @@ function renderInbox() {
     const showSub = ["failed", "unsupported"].includes(item.status) && item.message;
     return el("li", { className: item.status },
       pill(item.target),
-      el("span", { className: "name", textContent: item.name, title: item.name }),
+      el("span", { className: "name", title: item.name,
+                   textContent: item.count ? `${item.name}（${item.count} 個檔案）` : item.name }),
       el("span", { className: "status" }, statusText(item)),
       showSub ? el("span", { className: "sub", textContent: item.message }) : null);
   }));

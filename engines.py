@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Callable
@@ -30,12 +32,21 @@ def unique_path(path: Path) -> Path:
     """已存在就改成「名稱 (2).ext」，和 Finder 的做法一樣。"""
     if not path.exists():
         return path
+    # 資料夾沒有副檔名：「2026.09 收據」要變成「2026.09 收據 (2)」，
+    # 不能被當成「2026」＋「.09 收據」
+    stem, suffix = (path.name, "") if path.is_dir() else (path.stem, path.suffix)
     n = 2
     while True:
-        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
+        candidate = path.with_name(f"{stem} ({n}){suffix}")
         if not candidate.exists():
             return candidate
         n += 1
+
+
+def natural_key(path: Path) -> list:
+    """依檔名的「自然順序」排序：2.png 排在 10.png 前面。"""
+    return [int(part) if part.isdigit() else part.lower()
+            for part in re.split(r"(\d+)", path.name)]
 
 
 def require(tool: str, install_hint: str) -> str:
@@ -288,6 +299,36 @@ def video_to_mp4(src: Path, dst: Path) -> list[Path]:
     return [dst]
 
 
+# ── 合併成一份 PDF ─────────────────────────────────────────────────────────
+# 待轉檔/合併pdf/<批次名稱>/ 裡的檔案依檔名排序，合併成 已轉檔/合併pdf/<批次名稱>.pdf
+
+MERGE_TARGET = "合併pdf"
+MERGE_SCRIPT = Path(__file__).with_name("merge_pdf.py")
+VENV_PYTHON = Path(__file__).with_name(".venv") / "bin" / "python"
+
+
+def merge_inputs(folder: Path) -> tuple[list[Path], list[Path]]:
+    """回傳 (可以合併的檔案（已排序）, 不能合併的檔案)。"""
+    accepted, rejected = [], []
+    for f in sorted(folder.iterdir(), key=natural_key):
+        if f.name.startswith((".", "~$")):
+            continue
+        (accepted if f.is_file() and f.suffix.lower() in ROUTES[MERGE_TARGET]
+         else rejected).append(f)
+    return accepted, rejected
+
+
+def merge_to_pdf(src: Path, dst: Path) -> list[Path]:
+    # 合併要用 pyobjc（在 .venv 裡）；App 本身就是用 .venv 的 Python 執行，
+    # 指令版 ./convert.py 則是系統的 Python，所以一律交給 .venv 的 Python 跑。
+    python = VENV_PYTHON if VENV_PYTHON.exists() else Path(sys.executable)
+    files, _ = merge_inputs(src)
+    if not files:
+        raise ConvertError("資料夾裡沒有可以合併的圖片或 PDF")
+    run([str(python), str(MERGE_SCRIPT), str(dst), *map(str, files)], timeout=600)
+    return expect_output(dst)
+
+
 # ── 對照表：待轉檔/<目標>/ 底下，每種副檔名交給哪個引擎 ─────────────────────
 
 _IMAGES_IN = (".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff", ".webp")
@@ -314,4 +355,9 @@ ROUTES: dict[str, dict[str, Engine]] = {
     "jpg": _images_to("jpg"),
     "png": _images_to("png"),
     "mp4": {ext: video_to_mp4 for ext in sorted(wmv2mp4.VIDEO_SUFFIXES)},
+    # 合併的單位是「一個子資料夾」，這裡列的是資料夾裡可以放的檔案
+    MERGE_TARGET: {ext: merge_to_pdf for ext in (*_IMAGES_IN, ".pdf")},
 }
+
+# 輸出檔的副檔名：預設就是目標資料夾的名稱
+OUTPUT_SUFFIX = {MERGE_TARGET: "pdf"}
