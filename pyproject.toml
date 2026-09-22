@@ -1,0 +1,8 @@
+[project]
+name = "dropconvert"
+version = "0.1.0"
+description = "資料夾式轉檔工具：Office/圖片/Markdown/影片，macOS 原生視窗"
+requires-python = ">=3.9"
+dependencies = [
+    "pywebview>=5",
+]

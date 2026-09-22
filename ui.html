@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>轉檔工具</title>
+<style>
+  :root {
+    --bg: #f5f5f3;
+    --panel: #ffffff;
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --line: #e3e3e0;
+    --accent: #0a66d8;
+    --ok: #1f8a4c;
+    --bad: #c9352b;
+    --shadow: 0 1px 2px rgb(0 0 0 / .04), 0 1px 8px rgb(0 0 0 / .04);
+    --c-pdf: #d0402f;  --c-md: #4f5b66;  --c-docx: #2b5fae;
+    --c-jpg: #c06d12;  --c-png: #11837a; --c-mp4: #7348c4;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161618; --panel: #1f1f22; --text: #f2f2f4; --muted: #9a9aa2;
+      --line: #313136; --accent: #4a9bff; --ok: #3fbf74; --bad: #ff6b5e;
+      --shadow: none;
+      --c-pdf: #ff7a66; --c-md: #a9b4bf; --c-docx: #7ea8ff;
+      --c-jpg: #f0a24a; --c-png: #4fd1c1; --c-mp4: #b595ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", sans-serif;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  header { display: flex; align-items: flex-end; justify-content: space-between;
+           gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
+  h1 { font-size: 26px; margin: 0; letter-spacing: .02em; }
+  header p { margin: 2px 0 0; color: var(--muted); }
+  .folders { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  button {
+    font: inherit; cursor: pointer; border-radius: 8px; padding: 6px 12px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  }
+  button:hover { border-color: var(--muted); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff;
+                   font-weight: 600; padding: 8px 18px; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+  button:focus-visible, .card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  section { margin-top: 36px; }
+  .section-head { display: flex; align-items: center; justify-content: space-between;
+                  gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  h2 { font-size: 15px; margin: 0; color: var(--muted); font-weight: 600; }
+  h2 b { color: var(--text); }
+
+  /* ── 拖放格子 ── */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 640px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+  .card {
+    --c: var(--muted);
+    position: relative; overflow: hidden; cursor: pointer;
+    background: var(--panel); border: 1.5px dashed var(--line); border-radius: 14px;
+    padding: 18px 16px 16px; min-height: 112px; box-shadow: var(--shadow);
+    transition: border-color .15s, background .15s, transform .15s;
+  }
+  .card:hover { border-color: var(--c); }
+  .card.over { border-color: var(--c); border-style: solid; transform: scale(1.02);
+               background: color-mix(in srgb, var(--c) 8%, var(--panel)); }
+  .card .fmt { font-size: 22px; font-weight: 700; color: var(--c); letter-spacing: .02em; }
+  .card .from { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .card .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .card input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .card .progress { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 16px;
+                    font-size: 12px; background: var(--panel); border-top: 1px solid var(--line); }
+  .card .bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--c);
+               transition: width .2s; }
+
+  /* ── 清單 ── */
+  .list { list-style: none; margin: 0; padding: 0; background: var(--panel);
+          border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+  .list li { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; align-items: center;
+             gap: 12px; padding: 11px 16px; border-top: 1px solid var(--line); }
+  .list li:first-child { border-top: 0; }
+  .pill { justify-self: start; font-size: 12px; font-weight: 700; color: var(--c, var(--muted));
+          padding: 2px 8px; border-radius: 99px; text-align: center;
+          background: color-mix(in srgb, var(--c, var(--muted)) 12%, transparent); }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { font-size: 13px; color: var(--muted); text-align: right; white-space: nowrap; }
+  .sub { grid-column: 2 / -1; font-size: 13px; margin-top: -6px; overflow-wrap: anywhere; }
+  li.unsupported .name { color: var(--muted); }
+  li.unsupported .sub, li.cancelled .sub { color: var(--muted); }
+  li.failed .status, li.failed .sub { color: var(--bad); }
+  li.running .status { color: var(--accent); }
+  li.done .status { color: var(--ok); }
+  .spin { display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px;
+          border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+          animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } .card { transition: none; } }
+
+  .outputs { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px; margin-top: -4px; }
+  .outputs button { font-size: 13px; padding: 3px 10px; }
+  .empty { color: var(--muted); padding: 18px 16px; font-size: 14px; }
+  .note { font-size: 13px; color: var(--muted); margin: 10px 2px 0; }
+  .warn { font-size: 13px; background: color-mix(in srgb, var(--c-jpg) 14%, var(--panel));
+          border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; }
+
+  body.offline main { opacity: .4; pointer-events: none; }   /* 畫面上的狀態已經不可信 */
+  #offline { position: fixed; inset: 0 0 auto; background: var(--bad); color: #fff;
+             text-align: center; padding: 8px; font-size: 14px; }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+           background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px;
+           font-size: 14px; max-width: min(90vw, 560px); box-shadow: 0 6px 24px rgb(0 0 0 / .2); }
+</style>
+</head>
+<body>
+<div id="offline" hidden>轉檔核心已停止運作，請關閉視窗後重新開啟轉檔工具</div>
+
+<main>
+  <header>
+    <div>
+      <h1>轉檔工具</h1>
+      <p>把檔案拖進想要的格式，再按「開始轉換」</p>
+    </div>
+    <div class="folders">
+      <button data-open="inbox">開啟 待轉檔</button>
+      <button data-open="outbox">開啟 已轉檔</button>
+      <button data-open="done">開啟 已處理</button>
+    </div>
+  </header>
+
+  <section>
+    <div class="section-head"><h2><b>1</b>　拖曳檔案到目標格式（或點一下選檔）</h2></div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2><b>2</b>　待轉檔</h2>
+      <div>
+        <button id="cancel" hidden>停止</button>
+        <button id="start" class="primary" disabled>開始轉換</button>
+      </div>
+    </div>
+    <div id="warnings"></div>
+    <ul class="list" id="inbox"></ul>
+    <p class="note">轉 PDF 時 Microsoft Office 會在背景開啟，視窗可能會閃一下。成功的原始檔會移到「已處理」。</p>
+  </section>
+
+  <section id="done-section" hidden>
+    <div class="section-head"><h2>轉換完成（點檔名在 Finder 中顯示）</h2></div>
+    <ul class="list" id="done"></ul>
+  </section>
+</main>
+
+<div id="toast" hidden></div>
+
+<script>
+const TARGETS = {
+  pdf:  { label: "PDF",      from: "Word、Excel、PPT、圖片" },
+  md:   { label: "Markdown", from: "Word、PPT、Excel、PDF" },
+  docx: { label: "Word",     from: "Markdown" },
+  jpg:  { label: "JPG",      from: "PNG、HEIC、PDF 等" },
+  png:  { label: "PNG",      from: "JPG、HEIC、PDF 等" },
+  mp4:  { label: "MP4",      from: "MOV、WMV" },
+};
+const RETRYABLE = ["pending", "failed", "cancelled"];
+const $ = (sel) => document.querySelector(sel);
+let state = null;
+let cancelling = false;
+
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children.filter((c) => c != null));
+  return node;
+}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-Fileconv": "1", "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `伺服器回應 ${res.status}`);
+  return data;
+}
+
+let toastTimer;
+function toast(message) {
+  const t = $("#toast");
+  t.textContent = message;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 5000);
+}
+
+// ── 拖放格子 ──
+function buildCards(routes) {
+  const cards = $("#cards");
+  for (const [target, info] of Object.entries(TARGETS)) {
+    const input = el("input", { type: "file", multiple: true, accept: routes[target].join(",") });
+    const card = el("label", { className: "card" },
+      el("div", { className: "fmt", textContent: `→ ${info.label}` }),
+      el("div", { className: "from", textContent: `從 ${info.from}` }),
+      el("div", { className: "hint", textContent: routes[target].join(" ") }),
+      input);
+    card.style.setProperty("--c", `var(--c-${target})`);
+    input.addEventListener("change", () => { upload(target, card, [...input.files]); input.value = ""; });
+
+    let depth = 0;   // 拖過子元素時 dragenter/dragleave 會成對觸發，用計數避免閃爍
+    card.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; card.classList.add("over"); });
+    card.addEventListener("dragleave", () => { if (--depth === 0) card.classList.remove("over"); });
+    card.addEventListener("dragover", (e) => e.preventDefault());
+    card.addEventListener("drop", (e) => {
+      e.preventDefault(); depth = 0; card.classList.remove("over");
+      upload(target, card, [...e.dataTransfer.files]);
+    });
+    cards.append(card);
+  }
+}
+
+async function upload(target, card, files) {
+  const accepted = state.routes[target];
+  const extOf = (name) => (name.includes(".") ? "." + name.split(".").pop().toLowerCase() : "");
+  const good = files.filter((f) => accepted.includes(extOf(f.name)));
+  const bad = files.filter((f) => !good.includes(f));
+  if (bad.length) {
+    toast(`${bad.map((f) => `「${f.name}」`).join("、")}不能轉成 ${TARGETS[target].label}` +
+          `，可接受：${accepted.join(" ")}`);
+  }
+  for (const [i, file] of good.entries()) {
+    await uploadOne(target, card, file, `${i + 1}/${good.length}`);
+  }
+  card.querySelector(".progress")?.remove();
+  card.querySelector(".bar")?.remove();
+  refresh();
+}
+
+function uploadOne(target, card, file, counter) {
+  const label = card.querySelector(".progress") || card.appendChild(el("div", { className: "progress" }));
+  const bar = card.querySelector(".bar") || card.appendChild(el("div", { className: "bar" }));
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/upload?target=${target}&name=${encodeURIComponent(file.name)}`);
+    xhr.setRequestHeader("X-Fileconv", "1");
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const pct = Math.round((e.loaded / e.total) * 100);
+      label.textContent = `加入中 ${counter}：${file.name}　${pct}%`;
+      bar.style.width = pct + "%";
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 400) {
+        let msg = `「${file.name}」加入失敗`;
+        try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+        toast(msg);
+      }
+      resolve();
+    };
+    xhr.onerror = () => { toast(`「${file.name}」加入失敗，連線中斷`); resolve(); };
+    xhr.send(file);
+  });
+}
+
+// 拖到格子以外的地方時，不要讓瀏覽器直接打開那個檔案
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+
+// ── 清單 ──
+function statusText(item) {
+  switch (item.status) {
+    case "pending":     return "等待轉換";
+    case "queued":      return "排隊中";
+    case "running":     return el("span", {}, el("span", { className: "spin" }), `轉換中 ${item.elapsed ?? 0} 秒`);
+    case "failed":      return "失敗";
+    case "cancelled":   return "已取消";
+    case "unsupported": return "無法轉換";
+  }
+}
+
+function pill(target) {
+  const p = el("span", { className: "pill", textContent: target ? `→ ${TARGETS[target].label}` : "未分類" });
+  if (target) p.style.setProperty("--c", `var(--c-${target})`);
+  return p;
+}
+
+function renderInbox() {
+  const list = $("#inbox");
+  if (!state.inbox.length) {
+    list.replaceChildren(el("li", { className: "empty",
+      textContent: "還沒有檔案。把檔案拖到上面的格子，或直接放進 ~/Downloads/待轉檔/ 對應的子資料夾。" }));
+    return;
+  }
+  list.replaceChildren(...state.inbox.map((item) => {
+    const showSub = ["failed", "unsupported"].includes(item.status) && item.message;
+    return el("li", { className: item.status },
+      pill(item.target),
+      el("span", { className: "name", textContent: item.name, title: item.name }),
+      el("span", { className: "status" }, statusText(item)),
+      showSub ? el("span", { className: "sub", textContent: item.message }) : null);
+  }));
+}
+
+function renderDone() {
+  $("#done-section").hidden = !state.done.length;
+  $("#done").replaceChildren(...state.done.map((item) => {
+    const time = new Date(item.finished * 1000).toLocaleTimeString("zh-TW", { hour: "numeric", minute: "2-digit" });
+    return el("li", { className: "done" },
+      pill(item.target),
+      el("span", { className: "name", textContent: item.name, title: item.name }),
+      el("span", { className: "status", textContent: time }),
+      el("div", { className: "outputs" }, ...item.outputs.map((o) =>
+        el("button", { textContent: o.label, title: "在 Finder 中顯示",
+                       onclick: () => api("/api/reveal", { path: o.path }).catch((e) => toast(e.message)) }))));
+  }));
+}
+
+function renderControls() {
+  const n = state.inbox.filter((i) => RETRYABLE.includes(i.status)).length;
+  const start = $("#start"), cancel = $("#cancel");
+  if (!state.running) cancelling = false;
+  start.hidden = state.running;
+  start.disabled = n === 0;
+  start.textContent = n ? `開始轉換（${n} 個）` : "開始轉換";
+  cancel.hidden = !state.running;
+  cancel.disabled = cancelling;
+  cancel.textContent = cancelling ? "目前這個轉完就停…" : "停止";
+  $("#warnings").replaceChildren(...state.warnings.map((w) => el("div", { className: "warn", textContent: w })));
+}
+
+function render() {
+  if (!$("#cards").children.length) buildCards(state.routes);
+  renderInbox();
+  renderDone();
+  renderControls();
+}
+
+async function refresh() {
+  try {
+    state = await api("/api/state");
+    $("#offline").hidden = true;
+    document.body.classList.remove("offline");
+    render();
+  } catch {
+    $("#offline").hidden = false;
+    document.body.classList.add("offline");
+  }
+}
+
+// 轉換中每 0.5 秒更新，平常 1.5 秒；分頁在背景時暫停（但第一次一定要載入）
+async function loop() {
+  if (!document.hidden || state === null) await refresh();
+  setTimeout(loop, state?.running ? 500 : 1500);
+}
+
+$("#start").addEventListener("click", async () => {
+  try { await api("/api/convert", {}); } catch (e) { toast(e.message); }
+  refresh();
+});
+$("#cancel").addEventListener("click", async () => {
+  cancelling = true;
+  renderControls();
+  await api("/api/cancel", {}).catch((e) => toast(e.message));
+});
+document.querySelectorAll("[data-open]").forEach((b) =>
+  b.addEventListener("click", () => api("/api/open", { folder: b.dataset.open }).catch((e) => toast(e.message))));
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+
+loop();
+</script>
+</body>
+</html>
