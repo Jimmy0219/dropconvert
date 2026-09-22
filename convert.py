@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from dataclasses import dataclass
@@ -30,8 +31,28 @@ from pathlib import Path
 from engines import (MERGE_TARGET, OUTPUT_SUFFIX, ROUTES, ConvertError, Engine,
                      merge_inputs, office_cleanup, unique_path)
 
-# 三個資料夾的位置。想換地方改這裡就好。
-BASE = Path.home() / "Downloads"
+# 三個資料夾放在哪裡。預設是「下載項目」；要換地方，在設定檔寫
+#   {"base": "~/Desktop/個人工具/轉檔工具"}
+# 設定檔不放在程式資料夾裡：install.sh 更新時會把程式資料夾整個換成新版。
+CONFIG = Path.home() / ".config" / "dropconvert" / "config.json"
+CONFIG_WARNING = ""
+
+
+def load_base() -> Path:
+    global CONFIG_WARNING
+    default = Path.home() / "Downloads"
+    try:
+        base = json.loads(CONFIG.read_text(encoding="utf-8"))["base"]
+        return Path(base).expanduser()
+    except FileNotFoundError:
+        return default
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        # 設定檔寫錯時照樣能用，但要讓使用者知道現在用的是預設位置
+        CONFIG_WARNING = f"設定檔 {CONFIG} 讀取失敗（{e}），暫時使用「下載項目」"
+        return default
+
+
+BASE = load_base()
 INBOX = BASE / "待轉檔"
 OUTBOX = BASE / "已轉檔"
 DONE = BASE / "已處理"
@@ -88,7 +109,7 @@ def scan() -> tuple[list[Job], list[str]]:
     網頁介面每秒都會呼叫一次。
     """
     jobs: list[Job] = []
-    warnings: list[str] = []
+    warnings: list[str] = [CONFIG_WARNING] if CONFIG_WARNING else []
     if not INBOX.exists():
         return jobs, warnings
     for entry in sorted(INBOX.iterdir()):

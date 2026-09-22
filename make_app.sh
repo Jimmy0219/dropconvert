@@ -43,7 +43,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSDownloadsFolderUsageDescription</key>
-  <string>轉檔工具會讀取「下載項目」裡的「待轉檔」資料夾，並把結果存到「已轉檔」。</string>
+  <string>轉檔工具會讀取「待轉檔」資料夾，並把結果存到「已轉檔」。</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>轉檔工具的程式或「待轉檔」資料夾放在桌面上，需要讀寫這些檔案。</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>轉檔工具的程式或「待轉檔」資料夾放在文件裡，需要讀寫這些檔案。</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>轉檔工具需要控制 Microsoft Word、Excel、PowerPoint，才能把文件另存成 PDF。</string>
 </dict>
